@@ -17,16 +17,24 @@ contract FundMe {
 
     uint256 constant TARGET = 1000 * 10 ** 18; // 常量
 
-    address owner;
+    address public owner;
+
+    uint256 deploymentTimestamp;
+    uint256 lockTime;
 
 
-    constructor() {
+    constructor(uint256 lock_time) {
         dataFeed = AggregatorV3Interface(0x694AA1769357215DE4FAC081bf1f309aDC325306);
+        owner = msg.sender;
+        deploymentTimestamp = block.timestamp;
+
+       lockTime = lock_time;
     }
 
     // msg.value 是一个 “全局变量”，它返回一个 uint256 类型的值，表示当前函数调用时，调用者随交易一同发送的 ETH 数量，其单位是 Wei。
     function fund() external payable {
         require(convertEthToUsd(msg.value) >= MINIMUM_VALUE, "Send more ETH");
+        require(block.timestamp < deploymentTimestamp + lockTime, "window is closed");
         fundersToAmount[msg.sender] = msg.value;
     }
 
@@ -47,22 +55,45 @@ contract FundMe {
         return ethAmount * ethPrice / (10 ** 8);
     }
 
-    function transferOwnership(address newOwner) public {
-        require(msg.sender == owner, "this function can only be called by owner");
+    function transferOwnership(address newOwner) public onlyOwner {
         owner = newOwner;
     }
 
-    function getFund() external {
+    function getFund() external windowClose onlyOwner{
         require(convertEthToUsd(address(this).balance) >= TARGET, "Target is not reached");
-        require(msg.sender == owner, "this functin can only be called by owner");
-
         // transfer: transfer ETH and revert if tx failed
         // payable(msg.sender).transfer(address(this).balance);
 
-         (bool success, ) = payable(msg.sender).call{value: address(this).balance}("");
-         require(success, "Transfer failed");
+        // send: transfer ETH and return failed
+        // (bool success, ) = payable(msg.sender).send(address(this).balance);
+        // require(success, "Transfer failed");
 
-        // send
-        // call
+        // call: transfer ETH
+        (bool success, ) = payable(msg.sender).call{value: address(this).balance}("");
+        require(success, "Transfer tx failed");
+
+        fundersToAmount[msg.sender] = 0;
+    }
+
+
+    function refund() external windowClose{
+        require(convertEthToUsd(address(this).balance) < TARGET, "Target is reached");
+        require(fundersToAmount[msg.sender] != 0, "there is no fund for you");
+       
+        (bool success,) = payable (msg.sender).call{value: fundersToAmount[msg.sender]}("");
+        require(success, "Transfer tx failed");
+
+        fundersToAmount[msg.sender] = 0;
+    }
+
+
+    modifier windowClose() {
+        require(block.timestamp >= deploymentTimestamp + lockTime, "window is closed");
+         _;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "this functin can only be called by owner");
+        _;
     }
 }
